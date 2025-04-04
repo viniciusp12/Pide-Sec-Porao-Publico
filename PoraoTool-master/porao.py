@@ -27,6 +27,13 @@ last_shadow_backup = 0
 backup_root = f"C:\\Users\\{username}\\ProtectedBackup"
 os.makedirs(backup_root, exist_ok=True)
 
+# Pastas críticas para backup (ajuste conforme necessário)
+critical_folders = [
+    f"C:\\Users\\{username}\\Downloads",
+    f"C:\\Users\\{username}\\Documents",
+    f"C:\\Users\\{username}\\Desktop"
+]
+
 
 def log_event(message: str):
     """Registra eventos em um arquivo de log."""
@@ -73,10 +80,13 @@ def start_protection():
 
 
 def honeypot():
-    """Cria arquivos honeypot."""
-    for x in range(1, 100):
-        with open(f".porao{x}.txt", "w") as file:
-            file.write("arquivo feito para detectar o ransomware")
+    """Cria arquivos honeypot em pastas críticas."""
+    for folder in critical_folders:
+        os.makedirs(folder, exist_ok=True)
+        os.chdir(folder)  # Muda para a pasta para criar os honeypots lá
+        for x in range(1, 100):
+            with open(f".porao{x}.txt", "w") as file:
+                file.write("arquivo feito para detectar o ransomware")
 
 
 def securing_files(folder: str):
@@ -87,31 +97,47 @@ def securing_files(folder: str):
 
 
 def shadow_copy():
-    """Cria shadow copy a cada 1h30."""
-    global last_shadow_backup, username
+    """Cria shadow copy a cada 1h30 para pastas críticas."""
+    global last_shadow_backup
     now = time.time()
-    backup_path = backup_root
     if last_shadow_backup == 0 or (now - last_shadow_backup >= 5400):  # 1h30
         try:
-            # Executa xcopy em silêncio e captura saída
-            subprocess.run(f'xcopy "C:\\Users\\{username}\\Downloads\\*.*" "{backup_path}" /Y /E /Q', shell=True, check=True, capture_output=True, text=True)
+            for folder in critical_folders:
+                backup_path = os.path.join(backup_root, os.path.basename(folder))
+                os.makedirs(backup_path, exist_ok=True)
+                result = subprocess.run(
+                    f'xcopy "{folder}\\*.*" "{backup_path}" /Y /E /Q',
+                    shell=True,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                log_event(f"Backup criado para {folder}: {result.stdout}")
             subprocess.run("wmic shadowcopy delete", shell=True, check=True, capture_output=True)
             subprocess.run("wmic shadowcopy call create Volume='C:\\'", shell=True, check=True, capture_output=True)
             last_shadow_backup = now
-            securing_files(backup_path)
+            for folder in critical_folders:
+                backup_path = os.path.join(backup_root, os.path.basename(folder))
+                securing_files(backup_path)
             log_event("Shadow copy criada com sucesso.")
         except subprocess.CalledProcessError as e:
             log_event(f"Erro ao criar shadow copy: {e}")
 
 
 def restaurar_backup():
-    """Restaura arquivos do backup."""
-    global username
-    backup_path = backup_root
+    """Restaura arquivos do backup para pastas críticas."""
     try:
-        destravar(backup_path)
-        subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E /Q', shell=True, check=True, capture_output=True, text=True)
-        log_event("Arquivos restaurados do backup.")
+        for folder in critical_folders:
+            backup_path = os.path.join(backup_root, os.path.basename(folder))
+            destravar(backup_path)
+            result = subprocess.run(
+                f'xcopy "{backup_path}" "{folder}" /Y /E /Q',
+                shell=True,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            log_event(f"Arquivos restaurados para {folder}: {result.stdout}")
     except subprocess.CalledProcessError as e:
         log_event(f"Erro ao restaurar backup: {e}")
 
@@ -128,13 +154,16 @@ def novos_processos():
 
 class MonitorFolder(FileSystemEventHandler):
     def on_any_event(self, event):
+        # Ignorar eventos em pastas do sistema para reduzir carga
+        if any(p in event.src_path for p in ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]):
+            return
         global data_list, change_type
         if avaliar(*change_type):
             encerrar_proctree()
             restaurar_backup()
         if "porao" in event.src_path:
             change_type[4] += 1
-        data_list.append((time.time(), event.src_path, event_type))
+        data_list.append((time.time(), event.src_path, event.event_type))
 
     def on_created(self, event):
         global change_type
@@ -165,10 +194,18 @@ if __name__ == "__main__":
     start_protection()
     shadow_copy()  # Executa uma vez no início
     honeypot()
-    src_path = f"C:\\Users\\{username}\\Downloads"
+
+    # Monitorar múltiplos drives
+    drives_to_monitor = ["C:\\", "D:\\"]  # Adicione outros drives se necessário (ex.: "E:\\")
     event_handler = MonitorFolder()
     observer = Observer()
-    observer.schedule(event_handler, path=src_path, recursive=True)
+    for drive in drives_to_monitor:
+        try:
+            observer.schedule(event_handler, path=drive, recursive=True)
+            log_event(f"Monitoramento iniciado para o drive {drive}")
+        except Exception as e:
+            log_event(f"Erro ao configurar monitoramento de {drive}: {e}")
+
     observer.start()
     try:
         while True:
