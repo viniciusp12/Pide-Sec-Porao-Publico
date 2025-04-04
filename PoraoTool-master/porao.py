@@ -12,7 +12,7 @@ from detector import DetectorMalware
 import RegistroAdd as registry
 import tkinter as tk
 from tkinter import messagebox
-from destravar import destravar
+from destravar import destravar  # Importando destravar.py
 
 # Variáveis globais
 data_list = []
@@ -58,11 +58,12 @@ def start_protection():
     """Configura proteção inicial."""
     global users_list, username
     procname = psutil.Process(os.getpid()).name()
-    subprocess.run(f'wmic process where name="{procname}" CALL setpriority "above normal"', shell=True)
-    os.makedirs("protected_backup", exist_ok=True)
-    subprocess.run("takeown /F C:\\Windows\\System32\\vssadmin.exe", shell=True)
-    subprocess.run(f'icacls C:\\Windows\\System32\\vssadmin.exe /grant "{username}":F', shell=True)
-    subprocess.run("ren C:\\Windows\\System32\\vssadmin.exe adminvss.exe", shell=True)
+    try:
+        subprocess.run(f'wmic process where name="{procname}" CALL setpriority "above normal"', shell=True, check=True)
+        os.makedirs("protected_backup", exist_ok=True)
+        # Removido renomeação de vssadmin.exe para evitar quebrar shadow copies
+    except subprocess.CalledProcessError as e:
+        print(f"Erro na configuração inicial: {e}. Execute como administrador.")
 
     get_users = subprocess.run("wmic useraccount get name", capture_output=True, shell=True)
     users = get_users.stdout.decode()
@@ -83,40 +84,33 @@ def securing_files(folder: str):
         subprocess.run(f'icacls "{folder}" /deny "{user}":R', shell=True)
 
 
-"""def destravar(folder: str):
-    Concede acesso à pasta.
-    global users_list
-    for user in users_list:
-        subprocess.run(f'icacls "{folder}" /grant "{user}":R', shell=True)"""
-
-def restaurar_backup():
-    global username
-    backup_path = f"C:\\Users\\{username}\\Downloads\\protected_backup"
-    destravar(backup_path)  # Usa a função importada de destravar.py
-    subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E', shell=True)
-    log_event("Arquivos restaurados do backup.")
-
-
 def shadow_copy():
     """Cria shadow copy a cada 1h30."""
     global last_shadow_backup, username
     now = time.time()
     backup_path = f"C:\\Users\\{username}\\Downloads\\protected_backup"
-    if last_shadow_backup == 0 or (now - last_shadow_backup >= 5400):
-        subprocess.run(f'xcopy "C:\\Users\\{username}\\Downloads" "{backup_path}" /Y', shell=True)
-        subprocess.run("wmic shadowcopy delete", shell=True)
-        subprocess.run("wmic shadowcopy call create Volume='C:\\'", shell=True)
-        last_shadow_backup = now
-        securing_files(backup_path)
+    if last_shadow_backup == 0 or (now - last_shadow_backup >= 5400):  # 1h30 = 5400 segundos
+        try:
+            subprocess.run(f'xcopy "C:\\Users\\{username}\\Downloads\\*.*" "{backup_path}" /Y /E', shell=True, check=True)
+            subprocess.run("wmic shadowcopy delete", shell=True, check=True)
+            subprocess.run("wmic shadowcopy call create Volume='C:\\'", shell=True, check=True)
+            last_shadow_backup = now
+            securing_files(backup_path)
+            log_event("Shadow copy criada com sucesso.")
+        except subprocess.CalledProcessError as e:
+            log_event(f"Erro ao criar shadow copy: {e}")
 
 
 def restaurar_backup():
     """Restaura arquivos do backup."""
     global username
     backup_path = f"C:\\Users\\{username}\\Downloads\\protected_backup"
-    destravar(backup_path)
-    subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E', shell=True)
-    log_event("Arquivos restaurados do backup.")
+    try:
+        destravar(backup_path)  # Usa a função importada de destravar.py
+        subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E', shell=True, check=True)
+        log_event("Arquivos restaurados do backup.")
+    except subprocess.CalledProcessError as e:
+        log_event(f"Erro ao restaurar backup: {e}")
 
 
 def novos_processos():
@@ -166,7 +160,7 @@ if __name__ == "__main__":
     script_path = os.path.realpath(__file__)
     registry.AdicionarRegistro(script=script_path, name="PoraoRansomwareDetect")
     start_protection()
-    shadow_copy()
+    shadow_copy()  # Executa uma vez no início
     honeypot()
     src_path = f"C:\\Users\\{username}\\Downloads"
     event_handler = MonitorFolder()
@@ -178,8 +172,7 @@ if __name__ == "__main__":
             if avaliar(*change_type):
                 encerrar_proctree()
                 restaurar_backup()
-            shadow_copy()
-            novos_processos()
+            novos_processos()  # Monitora processos, mas shadow_copy só roda quando necessário
             if data_list:
                 time_since_last_change = abs(int(data_list[-1][0] - time.time()))
                 if time_since_last_change > 10 or sum(change_type) > 20:
@@ -189,6 +182,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         observer.stop()
         observer.join()
+        log_event("Programa encerrado pelo usuário.")
     except Exception as e:
         log_event(f"Erro inesperado: {e}")
         observer.stop()
