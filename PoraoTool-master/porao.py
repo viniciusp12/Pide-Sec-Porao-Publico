@@ -12,7 +12,7 @@ from detector import DetectorMalware
 import RegistroAdd as registry
 import tkinter as tk
 from tkinter import messagebox
-from destravar import destravar  # Importando destravar.py
+from destravar import destravar
 
 # Variáveis globais
 data_list = []
@@ -22,6 +22,10 @@ change_type = [0, 0, 0, 0, 0]  # [criados, modificados, movidos, deletados, edit
 ult_processos = []
 time_since_last_change = 100
 last_shadow_backup = 0
+
+# Caminho do backup fora da pasta Downloads
+backup_root = f"C:\\Users\\{username}\\ProtectedBackup"
+os.makedirs(backup_root, exist_ok=True)
 
 
 def log_event(message: str):
@@ -60,8 +64,6 @@ def start_protection():
     procname = psutil.Process(os.getpid()).name()
     try:
         subprocess.run(f'wmic process where name="{procname}" CALL setpriority "above normal"', shell=True, check=True)
-        os.makedirs("protected_backup", exist_ok=True)
-        # Removido renomeação de vssadmin.exe para evitar quebrar shadow copies
     except subprocess.CalledProcessError as e:
         print(f"Erro na configuração inicial: {e}. Execute como administrador.")
 
@@ -88,12 +90,13 @@ def shadow_copy():
     """Cria shadow copy a cada 1h30."""
     global last_shadow_backup, username
     now = time.time()
-    backup_path = f"C:\\Users\\{username}\\Downloads\\protected_backup"
-    if last_shadow_backup == 0 or (now - last_shadow_backup >= 5400):  # 1h30 = 5400 segundos
+    backup_path = backup_root
+    if last_shadow_backup == 0 or (now - last_shadow_backup >= 5400):  # 1h30
         try:
-            subprocess.run(f'xcopy "C:\\Users\\{username}\\Downloads\\*.*" "{backup_path}" /Y /E', shell=True, check=True)
-            subprocess.run("wmic shadowcopy delete", shell=True, check=True)
-            subprocess.run("wmic shadowcopy call create Volume='C:\\'", shell=True, check=True)
+            # Executa xcopy em silêncio e captura saída
+            subprocess.run(f'xcopy "C:\\Users\\{username}\\Downloads\\*.*" "{backup_path}" /Y /E /Q', shell=True, check=True, capture_output=True, text=True)
+            subprocess.run("wmic shadowcopy delete", shell=True, check=True, capture_output=True)
+            subprocess.run("wmic shadowcopy call create Volume='C:\\'", shell=True, check=True, capture_output=True)
             last_shadow_backup = now
             securing_files(backup_path)
             log_event("Shadow copy criada com sucesso.")
@@ -104,10 +107,10 @@ def shadow_copy():
 def restaurar_backup():
     """Restaura arquivos do backup."""
     global username
-    backup_path = f"C:\\Users\\{username}\\Downloads\\protected_backup"
+    backup_path = backup_root
     try:
-        destravar(backup_path)  # Usa a função importada de destravar.py
-        subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E', shell=True, check=True)
+        destravar(backup_path)
+        subprocess.run(f'xcopy "{backup_path}" "C:\\Users\\{username}\\Downloads" /Y /E /Q', shell=True, check=True, capture_output=True, text=True)
         log_event("Arquivos restaurados do backup.")
     except subprocess.CalledProcessError as e:
         log_event(f"Erro ao restaurar backup: {e}")
@@ -131,7 +134,7 @@ class MonitorFolder(FileSystemEventHandler):
             restaurar_backup()
         if "porao" in event.src_path:
             change_type[4] += 1
-        data_list.append((time.time(), event.src_path, event.event_type))
+        data_list.append((time.time(), event.src_path, event_type))
 
     def on_created(self, event):
         global change_type
@@ -172,7 +175,7 @@ if __name__ == "__main__":
             if avaliar(*change_type):
                 encerrar_proctree()
                 restaurar_backup()
-            novos_processos()  # Monitora processos, mas shadow_copy só roda quando necessário
+            novos_processos()
             if data_list:
                 time_since_last_change = abs(int(data_list[-1][0] - time.time()))
                 if time_since_last_change > 10 or sum(change_type) > 20:
